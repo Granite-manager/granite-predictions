@@ -1,0 +1,21 @@
+[project]
+name = "dm"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "catboost>=1.2.10",
+    "lightgbm>=4.7.0",
+    "matplotlib>=3.11.2",
+    "optuna>=5.1.0",
+    "pandas>=3.1.1",
+    "pgeocode>=0.5.0",
+    "pyarrow>=26.0.1",
+    "pymysql>=1.2.4",
+    "scikit-learn>=1.9.1",
+    "scipy>=1.18.1",
+    "sentence-transformers>=6.3.0",
+    "shap>=0.54.1",
+    "statsmodels>=0.15.0",
+    "torch>=2.15.0",
+    "xgboost>=3.4.1",
+]
