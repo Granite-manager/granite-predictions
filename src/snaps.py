@@ -165,5 +165,13 @@ Dc = Dall[["company_id", "created_at"]]
 SN["company_leads_30d"] = [((Dc.company_id == cid) & (Dc.created_at < tt) & (Dc.created_at >= tt - pd.Timedelta(days=30))).sum() for cid, tt in zip(SN.company_id, SN.t)]
 
 SN = SN.merge(S.drop(columns=["company_id"]), on="deal_id", how="left")
+# prior won deals of the same customer, counted only once they were won before t (static version used final outcomes)
+cust = Dall.set_index("id").customer_id
+SN["customer_id"] = SN.deal_id.map(cust)
+pw = SN[["sid", "customer_id", "created_at", "t"]].merge(
+    Dall[Dall.label_kind == "won"][["customer_id", "created_at", "close_t"]].rename(columns={"created_at": "p_created"}), on="customer_id")
+pw = pw[(pw.p_created < pw.created_at) & (pw.close_t < pw.t)]
+SN["cust_prior_won"] = SN.sid.map(pw.groupby("sid").size()).fillna(0)
+SN = SN.drop(columns=["customer_id"])
 SN.to_parquet("data/out/snaps.parquet")
 print(SN.shape)
