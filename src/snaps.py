@@ -34,6 +34,9 @@ EV = EV.merge(msg[["lat_in", "lat_out"]], left_index=True, right_index=True, how
 
 X = SN[["sid", "deal_id", "t", "created_at"]].merge(EV, on="deal_id")
 X = X[X.ts < X.t]
+import os
+if os.environ.get("AFTER_CREATE_ONLY"):
+    X = X[X.ts >= X.created_at]  # experiment: drop everything dated before the deal
 X["ago_d"] = (X.t - X.ts).dt.total_seconds() / 86400
 X["since_create_h"] = (X.ts - X.created_at).dt.total_seconds() / 3600
 g = X.groupby("sid")
@@ -173,5 +176,5 @@ pw = SN[["sid", "customer_id", "created_at", "t"]].merge(
 pw = pw[(pw.p_created < pw.created_at) & (pw.close_t < pw.t)]
 SN["cust_prior_won"] = SN.sid.map(pw.groupby("sid").size()).fillna(0)
 SN = SN.drop(columns=["customer_id"])
-SN.to_parquet("data/out/snaps.parquet")
+SN.to_parquet(os.environ.get("SNAPS_OUT", "data/out/snaps.parquet"))
 print(SN.shape)
