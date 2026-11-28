@@ -35,6 +35,43 @@ p, _, _ = fit_predict(tr, va, FEATURES, rounds, params)
 ho_auc = roc_auc_score(va.label, p, sample_weight=va.w)
 print("holdout AUC", round(ho_auc, 4))
 
+# ---------------------------------------------------------------- confidence: holdout AUC by store group x what has happened
+# How well the model ranks buyers above non-buyers depends on the store and on what has already happened with the deal,
+# so each answer carries the holdout AUC of its cell. The Lambda computes the level from the request the same way.
+CONF_GROUPS = {1: "Indianapolis", 3: "Columbus", 4: "GMQ", 12: "GMQ", 13: "GMQ", 2: "Lexington, Empire", 7: "Lexington, Empire"}
+CONF_MIN_AUC, CONF_MIN_DEALS = 0.70, 50
+
+
+def conf_level(df):
+    """replied: the customer wrote or called, or a call was answered; worked: the store wrote, called or moved the
+    stage without an answer; untouched: nothing yet."""
+    replied = (df.n_in > 0) | (df.call_answered > 0)
+    worked = (df.n_out > 0) | (df.stage_n_changes > 0)
+    return pd.Series(np.select([replied, worked], ["replied", "worked"], "untouched"), index=df.index)
+
+
+def conf_cell(x, boot=300):
+    deals = x.deal_id.nunique()
+    if deals < 10 or x.label.nunique() < 2:
+        return dict(auc=None, auc_low=None, auc_high=None, deals=int(deals), snapshots=int(len(x)))
+    auc = roc_auc_score(x.label, x.p, sample_weight=x.w)
+    ids = x.deal_id.unique(); by = {d: g for d, g in x.groupby("deal_id")}
+    rng = np.random.default_rng(0); bs = []
+    for _ in range(boot):
+        b = pd.concat([by[d] for d in rng.choice(ids, len(ids))])
+        if b.label.nunique() == 2:
+            bs.append(roc_auc_score(b.label, b.p, sample_weight=b.w))
+    lo, hi = np.percentile(bs, [5, 95])
+    return dict(auc=round(float(auc), 3), auc_low=round(float(lo), 3), auc_high=round(float(hi), 3), deals=int(deals), snapshots=int(len(x)))
+
+
+cv = va.assign(p=p, level=conf_level(va), grp=va.company_id.astype(int).map(CONF_GROUPS))
+cells = {g: {lv: conf_cell(cv[(cv.grp == g) & (cv.level == lv)]) for lv in ["replied", "worked", "untouched"]}
+         for g in dict.fromkeys(CONF_GROUPS.values())}
+confidence = dict(min_auc=CONF_MIN_AUC, min_deals=CONF_MIN_DEALS, groups={str(k): v for k, v in CONF_GROUPS.items()}, cells=cells)
+for g, row in cells.items():
+    print(f"{g:18s}", "  ".join(f"{lv}: {c['auc']} ({c['auc_low']}-{c['auc_high']}) {c['deals']}d" for lv, c in row.items()))
+
 # final model on every labeled snapshot; isotonic calibration from out-of-fold predictions
 X = SN[FEATURES]
 oof = np.zeros(len(SN))
@@ -85,6 +122,7 @@ out = dict(
     trees=[flat(t) for t in dump["tree_info"]],
     calibration=dict(x=[float(v) for v in iso.X_thresholds_], y=[float(v) for v in iso.y_thresholds_]),
     verdicts=dict(likely=0.5, unlikely=0.1),
+    confidence=confidence,
     rules=dict(stage_map=STAGE_MAP, won_group="Won Deals", stage_order=STAGE_ORD, rep_prior=0.38, rep_prior_weight=20, quote_window_days=60),
 )
 path = f"data/out/deal_odds_{VERSION}.json"
@@ -120,8 +158,9 @@ for i in pick:
                              project_size=None if pd.isna(cu.project_size) else str(cu.project_size), prior_won_deals=int(row.cust_prior_won)),
                rep=rep, stages=stages,
                quotes=[fmt(x) for x in qs.created_date],
-               notes=[dict(created_at=fmt(a), chars=len(c or "")) for a, c in zip(notes.created_at, notes.content)])
+               notes=[dict(created_at=fmt(a), chars=len(c or "")) for a, c in zip(notes.created_at, notes.content)],
+               activity=dict(inbound=int(row.n_in), outbound=int(row.n_out), answered_calls=int(row.call_answered)))
     feats = {f: (None if pd.isna(row[f]) else (str(row[f]) if f in CATEGORICAL else float(row[f]))) for f in FEATURES}
-    cases.append(dict(request=req, features=feats, raw_score=float(raw_score[i]), probability=float(iso.predict([1 / (1 + np.exp(-sig * raw_score[i]))])[0])))
+    cases.append(dict(request=req, features=feats, level=conf_level(SN.iloc[[i]]).iloc[0], raw_score=float(raw_score[i]), probability=float(iso.predict([1 / (1 + np.exp(-sig * raw_score[i]))])[0])))
 json.dump(cases, open(f"data/out/parity_{VERSION}.json", "w"), allow_nan=False)
 print("parity cases", len(cases))
